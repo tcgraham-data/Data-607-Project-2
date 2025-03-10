@@ -1,0 +1,513 @@
+---
+title: "Data 607, Project 2"
+author: "Tyler Graham"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data 607 - Project 2
+
+To begin, here is a summary of the tasks I'll be completing for this project: 
+
+Project 2 - Data 607: Summary of Tasks
+
+Dataset Selection:
+
+  Choose any three “wide” datasets from the Week 6 Discussion items.
+  Avoid using the Sample Post dataset (already used in Week 6).
+
+Data Preparation:
+
+  For each chosen dataset, create a CSV file (or optionally a MySQL database) that contains all the dataset information.
+  Use a “wide” structure that mirrors how the data appears in the discussion item.
+
+Data Import & Transformation:
+
+  Read each CSV file into R.
+  Use the tidyr and dplyr packages to tidy and transform your data. (Note: This step carries the most weight in your grade.)
+
+Analysis & Documentation:
+
+  Perform the analysis as requested in the discussion item for each dataset.
+  Prepare an R Markdown file that includes your code, narrative descriptions of your data cleanup, analysis, and conclusions.
+  Publish the R Markdown file to rpubs.com.
+
+```{r load-library, echo=TRUE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyverse)
+```
+
+With the correct packages installed, it's time to bring in the Data. I will be using:
+
+  D&D Data I shared in Discussion
+  Cheeses Data shared by a classmate
+  Rolling Stone Top Album data shared by a classmate.
+  
+  I downloaded all the datasets in their untidy forms and loaded them into my Github for easy access. Time to pull the untidy data into this project and check that it loaded in properly:
+  
+```{r load-data, echo=TRUE, message=FALSE, warning=FALSE}
+DungeonsAndDragons <- "https://raw.githubusercontent.com/tcgraham-data/Data-607-Project-2/refs/heads/main/dnd_chars_all.csv"
+Cheese <- "https://raw.githubusercontent.com/tcgraham-data/Data-607-Project-2/refs/heads/main/cheeses.csv"
+ROllingStoneTopAlbums <- "https://raw.githubusercontent.com/tcgraham-data/Data-607-Project-2/refs/heads/main/Rolling%20Stone%20500%20(public)%20-%20Data.csv"
+
+dnddata <- read.csv(DungeonsAndDragons)
+cheesedata <- read.csv(Cheese)
+albumdata <- read.csv(ROllingStoneTopAlbums)
+
+head(dnddata)
+head(cheesedata)
+head(albumdata)
+```  
+Now that our data is loaded, we need to clean it up with the intent of doing something with it. Since a lot of the discussions didn't necessarily have a request built in, I have developed my own questions to answer:
+
+1. D&D Data - What are the top Character classes and races by percent? Further, can we figure out what the top class/race pairs are by percent?
+
+2. Cheese Data - Who on earth makes the most cheese styles?
+
+3. Top Album Data - Which albums have had the most percent change on the rank list from 2003 to 2020? 
+
+## Dungeons And Dragons Data
+
+First thing we need to do is remove columns that aren't providing us with any real data related to the game itself. This can be done by manually look at the columns and striking those which aren't relevant using dplyr:
+
+
+```{r clean-data-1, echo=TRUE, message=FALSE, warning=FALSE}
+
+dnd_data_clean <- dnddata %>%
+  select(-matches("^(name|ip|finger|hash|date|alias)"))
+
+head(dnd_data_clean)
+```
+With that done, we need to get an "NA" added to any cell that is currently empty. That way I don't have to worry about cells getting weird on me:
+
+```{r add-na-clean-data-1, echo=TRUE, message=FALSE, warning=FALSE}
+
+dnd_data_clean <- dnd_data_clean %>%
+  mutate(across(where(is.character), ~na_if(., "")))
+
+head(dnd_data_clean)
+```
+Since I'm really only interested in the "race" and "justClass" columns for my observation, I want to make sure we remove any rows where those are empty. Since you can't functionally play the game without those two elements, there's not really a reason to measure them, even as "empty":
+
+```{r remove-rows-1, echo=TRUE, message=FALSE, warning=FALSE}
+dnd_data_clean <- dnd_data_clean %>%
+  filter(!is.na(race) & race != "empty",
+         !is.na(justClass) & justClass != "empty")
+
+# Display the cleaned dataset
+head(dnd_data_clean)
+```
+
+I do want to make it clear I want to keep all this data because you never know when you might need it. You never know when you just NEED to know what percentage of DnD players are Eldritch Knights...But since I'm not going to use all of it, I want to make a unique datafram with only the information I'm interested in:
+
+```{r dnd_datasubset, echo=TRUE, message=FALSE, warning=FALSE}
+
+dnd_subset <- dnd_data_clean %>% select(race, justClass)
+
+head(dnd_subset)
+```
+Now we're getting somewhere. The last thing I see that's a problem is that some characters have dual-classed. How do I treat that? In DnD parlance, the first listed class is the primary class, and the second is a secondary classing. Now we'll want to make a new column that splits up any dual classes by looking for a pipe and extracting info after the pipe:
+
+```{r dnd-subset-splitting, echo=TRUE, message=FALSE, warning=FALSE}
+dnd_subset <- dnd_subset %>%
+  mutate(`Secondary Class` = ifelse(grepl("\\|", justClass),
+                                      sub(".*\\|", "", justClass),
+                                      NA))
+
+head(dnd_subset)
+```
+That bit of research worked well. But I still have the extra secondary data in justClass and need to remove it. And I want to rename "justClass" to "Primary Class"
+
+```{r dnd-subset-tidying-1, echo=TRUE, message=FALSE, warning=FALSE}
+dnd_subset <- dnd_subset %>%
+  mutate(justClass = sub("\\|.*", "", justClass)) %>%
+  rename(`Primary Class` = justClass)
+head(dnd_subset)
+```
+
+And to just clean this up a little bit more, so we can capture who does and doesn't have a Second class:
+
+```{r dnd-subset-tidying-2, echo=TRUE, message=FALSE, warning=FALSE}
+dnd_subset <- dnd_subset %>%
+  mutate(`Secondary Class` = ifelse(is.na(`Secondary Class`) | `Secondary Class` == "", "none", `Secondary Class`))
+head(dnd_subset)
+```
+Let's start answering some questions. We have 10,867 records here. So this is a pretty solid statistical sample.
+
+##DnD Question 1 - What's the most popular race?
+
+```{r race-bar-chart-1, echo=TRUE, warning=FALSE, message=FALSE}
+
+library(ggplot2)
+
+ggplot(dnd_subset, aes(x = race)) +
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Race", x = "Race", y = "Count") +
+  theme_minimal()
+```
+That was unhelpful. I had no idea there were that many race options in the game. Color me impressed. I guess we'll just tabulate this differently. Let's make a new dataset that lists all races and then counts each instance and descends from most to least. Then we can graph the top ten.
+
+```{r race-count, echo=TRUE, warning=FALSE, message=FALSE}
+dnd_race_count <- dnd_subset %>%
+  count(race) %>%       
+  rename(Count = n) %>%   
+  arrange(desc(Count))    
+
+print(dnd_race_count)
+```
+
+```{r race-bar-chart-2, echo=TRUE, warning=FALSE, message=FALSE}
+library(ggplot2)
+
+top_races <- dnd_race_count %>% 
+  slice_max(Count, n = 10)
+
+ggplot(top_races, aes(x = reorder(race, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 10 Races by Count", x = "Race", y = "Count") +
+  theme_minimal()
+```
+
+This is cool. And it makes a lot of sense. In the game, humans get +1 to all stats for a total of +6 overall. Other races have a total of +3 to a stat. The "upside" to choosing a race other than human is that while humans have a blanket +1 to every stat, each race has one stat that receives a +2 perk. In general, this makes humans easier to play for new players. Most new players are encouraged to start with a human and then choose a more interesting race on the "next" game. I wonder what the percentage is between "human" and "all others:
+
+```{r human-vs-other, echo=TRUE, message=FALSE, warning=FALSE}
+human_vs_other <- dnd_race_count %>%
+  mutate(race_group = ifelse(tolower(race) == "human", "Human", "Other")) %>%
+  group_by(race_group) %>%
+  summarise(Total_Count = sum(Count))
+
+human_vs_other
+```
+
+
+```{r human-percent, echo=TRUE, message=FALSE, warning=FALSE}
+total_count <- sum(human_vs_other$Total_Count)
+
+human_count <- human_vs_other %>% 
+  filter(race_group == "Human") %>% 
+  pull(Total_Count)
+
+human_percentage <- (human_count / total_count) * 100
+
+human_percentage
+```
+That's much more in line with what I thought. The bar chart makes it look like Humans are far and away the top choice. Which they are for a single racial class. However, the reality is that it's going to be the largest instance because it is the most friendly to beginner players. So it's almost better to think of "human" as beginners and all others as veteran players. I would believe that 81% of DnD players more likely to play more complex and challenging characters.
+
+## D&D Data Question 2 - What's the most played character class?
+
+```{r count-primary-classes, echo=TRUE}
+dnd_class_count <- dnd_subset %>%
+  count(`Primary Class`) %>%       
+  rename(Count = n) %>%           
+  arrange(desc(Count))             
+
+dnd_class_count
+
+top_classes <- dnd_class_count %>%
+  slice_max(Count, n = 10)
+
+top_classes
+```
+```{r primary-class-bar-chart, echo=TRUE, warning=FALSE, message=FALSE}
+ggplot(top_classes, aes(x = reorder(`Primary Class`, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 10 Primary Classes", x = "Primary Class", y = "Count") +
+  theme_minimal()
+```
+
+Answer: Fighter. That makes a lot of sense. It's one of the most flexible classes to generally do what you want to do. About all you can't do well as a "fighter" is cast magic. But magic users are hard because they get real squishy, real fast. OK. I've spent way too much time on DnD data. Time to tackle CHeese.
+
+## Cheese Data
+
+OK. I have to get more focused on what I'm doing here. I don't want this to ramble too much. My main question here was:
+
+## Which nation makes the most chesses on earth?
+
+Let's begin be tidying up our data. There are a few columns here that don't provide us with much information, nor do we really need it because of how little infor we get out of it. So let's scrub some data:
+
+```{r clean-cheese-data-1, echo=TRUE, message=FALSE, warning=FALSE}
+
+cheese_data_clean <- cheesedata %>%
+  select(-matches("^(url|region|family|fat_content|calcium_content|synonyms|alt_spellings|producers|vegetarian|vegan)"))
+
+head(cheese_data_clean)
+```
+Now we need to update this so that any empty cells are given the null of "NA"
+
+```{r add-na-cheese-data-1, echo=TRUE, message=FALSE, warning=FALSE}
+
+cheese_data_clean <- cheese_data_clean %>%
+  mutate(across(where(is.character), ~na_if(., "")))
+
+head(cheese_data_clean)
+```
+Perfect. Now we have solid data. But it's still wide and we need to make it long to get the answer we seek. And I need to make the question harder so I can have fun exploding columns. Let's keep cheese, country, and type:
+
+```{r long-cheese-1, echo=TRUE, message=FALSE, warning=FALSE}
+cheese_data_subset <- cheese_data_clean %>%
+  select(cheese, country, type)
+
+
+head(cheese_data_subset)
+```
+Great. Now I want to generate new columns for type such that each column only has one descriptor:
+
+```{r more-types, echo=TRUE, message=FALSE, warning=FALSE}
+cheese_data_subset <- cheese_data_subset %>%
+  mutate(type = trimws(type)) %>% 
+  separate(type, into = c("type1", "type2", "type3"), sep = ",", fill = "right", extra = "drop")
+  
+head(cheese_data_subset)
+```
+OK this is getting fun. type1 really seams to be about cheese hardness. So let's rename the columns and then sort data accordingly:
+
+```{r more-categories, echo=TRUE, message=FALSE, warning=FALSE}
+cheese_data_subset <- cheese_data_subset %>%
+  rename(hardness = type1,
+         category = type2,
+         type = type3)
+
+head(cheese_data_subset)
+```
+```{r unique-values, echo=TRUE,message=FALSE, warning=FALSE}
+unique_hardness <- unique(cheese_data_subset$hardness)
+unique_category <- unique(cheese_data_subset$category)
+unique_type <- unique(cheese_data_subset$type)
+
+cat("Unique Hardness values:\n")
+print(unique_hardness)
+
+cat("\nUnique Category values:\n")
+print(unique_category)
+
+cat("\nUnique Type values:\n")
+print(unique_type)
+```
+Now we need to start moving data around to be in the correct columns.
+
+```{r move-values, echo=TRUE,message=FALSE, warning=FALSE}
+cheese_data_subset <- cheese_data_subset %>%
+  mutate(
+    category = if_else(
+      hardness == "artisan",
+      if_else(category %in% c("empty", "", NA_character_), 
+              "artisan", 
+              paste(category, "artisan", sep = ", ")),
+      category
+    ),
+    hardness = if_else(hardness == "artisan", NA_character_, hardness)
+  )
+
+head(cheese_data_subset)
+```
+Ok this worked so well that I decided I wanted to scan all three columns for all keywords. Then I wanted to seperate each key word into the right column. I thought this would be easy. It was not. I turned to the internet for help and discovered some new libraries to get this done. I don't know if this is OK or not...but it tidies my data how I wanted it. So I guess there's that.
+
+```{r reassign-keywords, echo=TRUE, warning=FALSE, message=FALSE}
+library(stringr)
+library(purrr)
+
+hardness_keywords <- c("semi-soft", "semi-hard", "soft", "hard", "firm", "fresh soft", "semi-firm", "fresh firm")
+category_keywords <- c("artisan", "processed", "organic", "smear-ripened")
+type_keywords     <- c("soft-ripened", "brined", "blue-veined", "smear-ripened", "whey")
+
+reassign_keywords <- function(hardness_val, category_val, type_val) {
+  all_vals <- c(hardness_val, category_val, type_val)
+  all_vals <- unlist(str_split(all_vals, ","))
+  all_vals <- str_trim(all_vals)
+  all_vals <- all_vals[all_vals != ""]
+  
+  new_hardness <- paste(intersect(all_vals, hardness_keywords), collapse = ", ")
+  new_category <- paste(intersect(all_vals, category_keywords), collapse = ", ")
+  new_type     <- paste(intersect(all_vals, type_keywords), collapse = ", ")
+  
+  tibble(new_hardness = new_hardness,
+         new_category = new_category,
+         new_type = new_type)
+}
+
+new_values <- cheese_data_subset %>% 
+  select(hardness, category, type) %>%
+  pmap_dfr(reassign_keywords)
+
+cheese_data_subset_updated <- cheese_data_subset %>%
+  bind_cols(new_values) %>%
+  select(-hardness, -category, -type) %>%
+  rename(
+    hardness = new_hardness,
+    category = new_category,
+    type = new_type
+  )
+
+cheese_data_subset_updated <- cheese_data_subset_updated %>%
+  mutate(across(everything(), ~ifelse(. == "", NA_character_, .)))
+
+head(cheese_data_subset_updated)
+
+```
+PERFECT. This is the coolest thing I've done in R. I'm really happy with this. OK. Now to get a bar chart of cheeses by country of origin:
+
+```{r country-bar-chart-1, echo=TRUE, warning=FALSE, message=FALSE}
+country_counts <- cheese_data_subset_updated %>%
+  count(country) %>%          
+  arrange(desc(n)) %>%        
+  slice_max(n, n = 20)        
+
+ggplot(country_counts, aes(x = reorder(country, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 Countries by Number of Rows", 
+       x = "Country", 
+       y = "Count") +
+  theme_minimal()
+```
+Oh crud. Turns our the country column was also comma dilineated. Let's truncate that and redo the graph:
+
+```{r clean-country, echo=TRUE, warning=FALSE, message=FALSE}
+cheese_data_subset_updated <- cheese_data_subset_updated %>%
+  mutate(country = sub(",.*", "", country))
+
+head(cheese_data_subset_updated$country)
+```
+```{r country-bar-chart-2, echo=TRUE, warning=FALSE, message=FALSE}
+country_counts <- cheese_data_subset_updated %>%
+  count(country) %>%    
+  arrange(desc(n)) %>%      
+  slice_max(n, n = 20)        
+
+
+ggplot(country_counts, aes(x = reorder(country, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 Countries by Number of Rows", 
+       x = "Country", 
+       y = "Count") +
+  theme_minimal()
+```
+Better. I suppose if I'm being thorough. I should collapse "Ireland" "Scotland" and "England" all into "United Kingdom" and see how it looks. It'll have an effect...
+
+```{r update-country, echo=TRUE, warning=FALSE, message=FALSE}
+cheese_data_subset_updated <- cheese_data_subset_updated %>%
+  mutate(country = case_when(
+    country %in% c("Ireland", "Scotland", "England") ~ "United Kingdom",
+    TRUE ~ country
+  ))
+
+head(cheese_data_subset_updated$country)
+```
+
+Let's try the chart one more time: 
+
+```{r country-bar-chart-3, echo=TRUE, warning=FALSE, message=FALSE}
+country_counts <- cheese_data_subset_updated %>%
+  count(country) %>%        
+  arrange(desc(n)) %>%        
+  slice_max(n, n = 20)        
+
+ggplot(country_counts, aes(x = reorder(country, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 Countries by Number of Rows", 
+       x = "Country", 
+       y = "Count") +
+  theme_minimal()
+```
+Who in the world makes the most cheese? The United States. King of Cheese.
+
+Onto the last bit of data.
+
+##Rolling Stone Top Album Data
+
+I am refusing to go off on any wild data goose chases. I'm like 5 hours into this project and ready to wrap it up. So here's the question we want to answer, knowing that we have the top album data from 2003 to 2020. I want to know what the differential in movement is and I want to know the top movers up and top movers down. Like, over the course of 17 years, who got more popular and who got less popular.
+
+##Question - Who were the top movers up and down over the course of 17 years?
+
+Let's begin by scrubbing data that has no real meaning for us:
+
+```{r clean-album-data-1, echo=TRUE, message=FALSE, warning=FALSE}
+album_data_clean <- albumdata %>%
+  select(-matches("^(Album.ID|Album.ID.Quoted)"))
+
+head(album_data_clean)
+```
+
+OK....Now all this is interesting, but we really only need a dataframe that covers what we're interested in, which is Clean.Name, Album, and X2020.2003.Differential
+
+```{r album-subset-1, echo=TRUE, warning=FALSE, message=FALSE}
+album_subset <- album_data_clean %>%
+  select(Clean.Name, Album, X2020.2003.Differential)
+
+head(album_subset)
+```
+Terrific. Let's organize by descending.
+
+```{r sort-album, echo=TRUE, warning=FALSE, message=FALSE}
+top_positive <- album_subset %>%
+  filter(X2020.2003.Differential > 0) %>%     
+  slice_max(order_by = X2020.2003.Differential, n = 15)
+
+top_negative <- album_subset %>%
+  filter(X2020.2003.Differential < 0) %>%     
+  slice_min(order_by = X2020.2003.Differential, n = 15)
+
+top_positive
+top_negative
+```
+OK. Well that was interesting. I had to take a second look at the data, because I don't understand how we can have 15 records at -501. Turns out that if an album was not on the chart in 2003 OR again in 2020 it had a net score of -501. This is possible because they are on the list from the stats pulled in 2012. So all 15 albums listed in top_negative all popped onto the list in 2012 only. They weren't there in 2003 and were gone again by 2012. I guess the differntial column is less useful than I would have hoped? 
+
+SO let's rerun our dataframe with the 2003 and 2020 data. I'm not interested in albums that were on and off between those two periods. I also want to calculate my own differential. So really, I'm asking that of the 2003 albums that were still on the list by 2020...who were the top movers. So we need to reclean our data a bit:
+
+```{r album-subset-2, echo=TRUE, warning=FALSE, message=FALSE}
+album_subset <- album_data_clean %>%
+  select(Clean.Name, Album, X2003.Rank, X2020.Rank)
+
+head(album_subset)
+```
+OK. Let's make this an exploration of classic rock rather than the new stuff. If you aren't on the list in 2003, I'm not interested. Also...if you aren't on the list in 2020, I'm not interested. So let's remove those:
+
+```{r filter-album, echo=TRUE, warning=FALSE, message=FALSE}
+album_subset <- album_subset %>%
+  filter(!is.na(X2003.Rank) & !is.na(X2020.Rank))
+
+head(album_subset)
+```
+Now that we have that, let's calculate the differential between 2003 and 2020:
+
+```{r add-difference, echo=TRUE, warning=FALSE, message=FALSE}
+album_subset <- album_subset %>%
+  mutate(Difference = X2003.Rank - X2020.Rank)
+
+head(album_subset)
+```
+
+Alright...not let's look at the top movers on the high and low sides:
+
+```{r top-movers, echo=TRUE, warning=FALSE, message=FALSE}
+top_positive_movers <- album_subset %>%
+  filter(Difference > 0) %>%  
+  slice_max(order_by = Difference, n = 15)
+
+top_negative_movers <- album_subset %>%
+  filter(Difference < 0) %>%
+  slice_min(order_by = Difference, n = 15)
+
+top_positive_movers
+top_negative_movers
+```
+OK, this is very cool. 
+
+##Answer
+
+We can see how D'Angelo, Jay-Z and Radiohead had massive resurgences from 2003 to 2020. And looking at the other direction, Muddy Waters, Phil Spector and Al Green lost a lot of ground. 
+
+I honestly don't know what to make of most of this information, but there are the top album movers over a fun 17 year span.
+
+##Conclusion
+
+This was a cool exercise. I feel so much more comfortable cleaning data. To the extent that I have a much better understanding of what that even means. More crucially, I have total confidence in my ability to just move data around to get the kinds of answers I want out of it, or better, the answers paying clients will want out of it. This was neat. It was hard and challenging, but neat. Thanks for the exercise!!
+
